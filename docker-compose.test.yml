@@ -1,0 +1,11 @@
+version: '3.1'
+
+services:
+  mgo-fencedlock:
+    image: mongo
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mgo
+      MONGO_INITDB_ROOT_PASSWORD: mgo
+    ports:
+      - "27017:27017"
