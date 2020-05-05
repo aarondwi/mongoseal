@@ -36,7 +36,7 @@ func New(
 	dbname string,
 	ownerID string,
 	expiryTimeMs int16) (*MgoFencedLock, error) {
-	ctx, cancelFunc := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connectionURL))
 	if err != nil {
