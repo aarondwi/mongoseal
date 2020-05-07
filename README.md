@@ -28,6 +28,8 @@ While doing that, you can also change default expiry to meet your use case
 The time resolution for lock expiry time is 1 second, to reduce errors caused
 by NTP ~250ms bound
 
+All of the read/write operation are using `majority` concern
+
 Usage
 --------------------------------------------------
 ```go
@@ -45,8 +47,10 @@ if err != nil {
 
 if mgolock.IsValid() {
   // your code goes here
-  // always need to check IsValid()
+  // always need to check IsValid() before starting
   // to ensure the lock doesn't expire even before the code starts
+  // can't do anything if the lock becomes invalid in the middle of your code
+  // see https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html
 }
 
 // release the lock

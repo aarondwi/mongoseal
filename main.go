@@ -9,6 +9,9 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readconcern"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 )
 
 // MgoLock is the object users get
@@ -52,9 +55,14 @@ func New(
 	expiryTimeSecond int64) (*MgoFencedLock, error) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connectionURL))
+	client, _ := mongo.Connect(
+		ctx,
+		options.Client().ApplyURI(connectionURL),
+		options.Client().SetWriteConcern(writeconcern.New(writeconcern.WMajority())),
+		options.Client().SetReadConcern(readconcern.Majority()))
+	err := client.Ping(ctx, readpref.Primary())
 	if err != nil {
-		log.Fatalf("Failed connecting to mongo: %v", err)
+		log.Printf("Failed connecting to mongo: %v", err)
 		cancelFunc()
 		return nil, err
 	}

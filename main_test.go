@@ -10,7 +10,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	m, err := New("mongodb://mgo:mgo@localhost:27017/?writeConcern=majority&readConcern=majority", "mgo", "ownerID", 2000)
+	m, err := New("mongodb://mgo:mgo@localhost:27017/", "mgo", "ownerID", 2000)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
@@ -22,8 +22,15 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestNewFailed(t *testing.T) {
+	_, err := New("mongodb://notexist:notexist@localhost:27017/", "mgo", "ownerID", 2000)
+	if err == nil {
+		t.Fatalf("Creating connection should fail but it is not")
+	}
+}
+
 func TestAcquireRefreshDelete(t *testing.T) {
-	m, err := New("mongodb://mgo:mgo@localhost:27017/?writeConcern=majority&readConcern=majority", "mgo", "ownerID", 2)
+	m, err := New("mongodb://mgo:mgo@localhost:27017/", "mgo", "ownerID", 2)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
