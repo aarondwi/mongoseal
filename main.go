@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -11,23 +12,37 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// Lock is the object users get
+// MgoLock is the object users get
 // after lock is acquired at mongodb
-type Lock struct {
-	key      string
-	lastSeen time.Time
-	version  int
-	ctx      context.Context
+type MgoLock struct {
+	sync.Mutex
+	Key        string
+	Version    int
+	isValid    bool
+	ctx        context.Context
+	cancelFunc context.CancelFunc
+}
+
+// IsValid handle goroutine-safe checking of isValid
+func (m *MgoLock) IsValid() bool {
+	(*m).Lock()
+	defer (*m).Unlock()
+	return m.isValid
+}
+func (m *MgoLock) updateValidity(status bool) {
+	(*m).Lock()
+	defer (*m).Unlock()
+	m.isValid = status
 }
 
 // MgoFencedLock is the core object to create by user
 type MgoFencedLock struct {
-	client       *mongo.Client
-	lockColl     *mongo.Collection
-	ctx          context.Context
-	cancelFunc   context.CancelFunc
-	ownerID      string
-	expiryTimeMs int16
+	client           *mongo.Client
+	lockColl         *mongo.Collection
+	ctx              context.Context
+	cancelFunc       context.CancelFunc
+	ownerID          string
+	expiryTimeSecond int64
 }
 
 // New creates our new MgoFencedLock
@@ -35,7 +50,7 @@ func New(
 	connectionURL string,
 	dbname string,
 	ownerID string,
-	expiryTimeMs int16) (*MgoFencedLock, error) {
+	expiryTimeSecond int64) (*MgoFencedLock, error) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(connectionURL))
@@ -47,12 +62,12 @@ func New(
 
 	coll := client.Database(dbname).Collection("lock")
 	return &MgoFencedLock{
-		client:       client,
-		lockColl:     coll,
-		ctx:          ctx,
-		cancelFunc:   cancelFunc,
-		ownerID:      ownerID,
-		expiryTimeMs: expiryTimeMs,
+		client:           client,
+		lockColl:         coll,
+		ctx:              ctx,
+		cancelFunc:       cancelFunc,
+		ownerID:          ownerID,
+		expiryTimeSecond: expiryTimeSecond,
 	}, nil
 }
 
@@ -66,33 +81,37 @@ func (m *MgoFencedLock) Close() {
 
 // AcquireLock creates lock records on mongodb
 // and fetch the record to return to users
-func (m *MgoFencedLock) AcquireLock(key string) (*Lock, error) {
+func (m *MgoFencedLock) AcquireLock(key string) (*MgoLock, error) {
+	currentTime := time.Now().Unix()
 	filter := bson.D{
-		bson.E{Key: "key", Value: key},
+		bson.E{Key: "Key", Value: key},
 		bson.E{
 			Key: "$or",
 			Value: bson.A{
-				bson.E{Key: "last_seen", Value: nil},
-				bson.E{Key: "last_seen", Value: "new Date() - 10"},
+				bson.D{bson.E{Key: "last_seen", Value: nil}},
+				bson.D{bson.E{Key: "last_seen",
+					// resolution unit is second
+					// reducing the chance from ntp ~250ms error
+					Value: bson.M{"$lt": currentTime - m.expiryTimeSecond}}},
 			}},
 	}
 	update := bson.D{
-		bson.E{Key: "$inc", Value: bson.E{Key: "version", Value: 1}},
+		bson.E{Key: "$inc", Value: bson.M{"Version": 1}},
 		bson.E{
 			Key: "$set",
 			Value: bson.D{
 				bson.E{Key: "owner", Value: m.ownerID},
-				bson.E{Key: "last_seen", Value: "new Date()"},
+				bson.E{Key: "last_seen", Value: currentTime},
 			}},
 	}
-	upsert := true
 	result, err := m.lockColl.UpdateOne(
-		m.ctx,
-		filter, update,
-		&options.UpdateOptions{Upsert: &upsert})
+		m.ctx, filter, update,
+		options.Update().SetUpsert(true))
 
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Failed Upserting lock into mongo: %v", err)
+		log.Print(currentTime)
+		log.Print(currentTime - m.expiryTimeSecond)
 		return nil, err
 	}
 	if result.MatchedCount == 0 &&
@@ -101,30 +120,71 @@ func (m *MgoFencedLock) AcquireLock(key string) (*Lock, error) {
 		return nil, errors.New("All return codes are 0")
 	}
 
+	var mgolock MgoLock
+	ctx, cancelFunc := context.WithCancel(m.ctx)
+	mgolock.ctx = ctx
+	mgolock.cancelFunc = cancelFunc
+
 	filter = bson.D{
 		bson.E{Key: "owner", Value: m.ownerID},
-		bson.E{Key: "key", Value: key}}
-	var lock *Lock
-	err = m.lockColl.FindOne(m.ctx, filter).Decode(&lock)
+		bson.E{Key: "Key", Value: key}}
+	err = m.lockColl.FindOne(mgolock.ctx, filter).Decode(&mgolock)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("Just written lock not found %v", err)
 		return nil, err
 	}
 
-	return lock, nil
+	mgolock.updateValidity(true)
+	go m.refreshLock(&mgolock, m.expiryTimeSecond)
+	return &mgolock, nil
 }
 
-// RefreshLock updates the last_seen attribute in mongodb
-// by default, it is already run periodically on its own goroutine
-func (m *MgoFencedLock) RefreshLock(lock *Lock) error {
-	return nil
+func (m *MgoFencedLock) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
+	// 100ms before the lock is considered stale, we refresh
+	// also act as buffer to reduce margin of error
+	ticker := time.NewTicker(
+		time.Duration((expiryTimeSecond*1000)-100) *
+			time.Millisecond)
+
+	for {
+		select {
+		case <-mgolock.ctx.Done():
+			mgolock.updateValidity(false)
+			return
+		case <-ticker.C:
+			log.Printf("Refreshing the lock with key: %s", mgolock.Key)
+			filter := bson.D{
+				bson.E{Key: "owner", Value: m.ownerID},
+				bson.E{Key: "Key", Value: mgolock.Key},
+				bson.E{Key: "Version", Value: mgolock.Version}}
+			update := bson.D{
+				bson.E{
+					Key: "$set",
+					Value: bson.E{
+						Key:   "last_seen",
+						Value: time.Now().Unix()}}}
+			result, err := m.lockColl.UpdateOne(mgolock.ctx, filter, update)
+			if err != nil ||
+				(result.MatchedCount == 0 &&
+					result.ModifiedCount == 0 &&
+					result.UpsertedCount == 0) {
+				mgolock.updateValidity(false)
+				return
+			}
+		}
+	}
 }
 
 // DeleteLock removes the record lock from mongodb
 // Returns nothing, as error may mean the lock has been taken by others
-func (m *MgoFencedLock) DeleteLock(lock *Lock) {
-	filter := bson.D{
-		bson.E{Key: "owner", Value: m.ownerID},
-		bson.E{Key: "key", Value: lock.key}}
-	m.lockColl.DeleteOne(m.ctx, filter)
+func (m *MgoFencedLock) DeleteLock(mgolock *MgoLock) {
+	if mgolock.IsValid() {
+		mgolock.updateValidity(false)
+		filter := bson.D{
+			bson.E{Key: "owner", Value: m.ownerID},
+			bson.E{Key: "Key", Value: mgolock.Key},
+			bson.E{Key: "Version", Value: mgolock.Version}}
+		m.lockColl.DeleteOne(mgolock.ctx, filter)
+	}
+	mgolock.cancelFunc()
 }
