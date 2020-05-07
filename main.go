@@ -2,7 +2,6 @@ package mgofencedlock
 
 import (
 	"context"
-	"errors"
 	"log"
 	"sync"
 	"time"
@@ -25,13 +24,13 @@ type MgoLock struct {
 
 // IsValid handle goroutine-safe checking of isValid
 func (m *MgoLock) IsValid() bool {
-	(*m).Lock()
-	defer (*m).Unlock()
+	m.Lock()
+	defer m.Unlock()
 	return m.isValid
 }
 func (m *MgoLock) updateValidity(status bool) {
-	(*m).Lock()
-	defer (*m).Unlock()
+	m.Lock()
+	defer m.Unlock()
 	m.isValid = status
 }
 
@@ -104,7 +103,7 @@ func (m *MgoFencedLock) AcquireLock(key string) (*MgoLock, error) {
 				bson.E{Key: "last_seen", Value: currentTime},
 			}},
 	}
-	result, err := m.lockColl.UpdateOne(
+	_, err := m.lockColl.UpdateOne(
 		m.ctx, filter, update,
 		options.Update().SetUpsert(true))
 
@@ -113,11 +112,6 @@ func (m *MgoFencedLock) AcquireLock(key string) (*MgoLock, error) {
 		log.Print(currentTime)
 		log.Print(currentTime - m.expiryTimeSecond)
 		return nil, err
-	}
-	if result.MatchedCount == 0 &&
-		result.ModifiedCount == 0 &&
-		result.UpsertedCount == 0 {
-		return nil, errors.New("All return codes are 0")
 	}
 
 	var mgolock MgoLock

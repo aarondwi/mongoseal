@@ -1,9 +1,6 @@
 # mgofencedlock
 Distributed locks using mongodb, with fencing
 
-Status: Not Yet Ready
-
-
 Setup
 ----------------------
 Run this script below in your mongo:
@@ -13,7 +10,8 @@ db.lock.createIndex( { "Key": 1 }, { unique: true } )
 db.lock.createIndex( { "last_seen": 1 }, { expireAfterSeconds: 600 } )
 ```
 
-**Notes:**
+Notes
+-------------------------------------------------
 
 ExpireAfterSeconds is not set to remove lock directly, 
 but at much higher time than lock TTL
@@ -25,13 +23,44 @@ It is also for not bloating the storage, in case it is not deleted normally
 You will need to the above function manually
 While doing that, you can also change default expiry to meet your use case
 
+100ms before lock timeouts, it will refresh the lock automatically.
+
+The time resolution for lock expiry time is 1 second, to reduce errors caused
+by NTP ~250ms bound
+
+Usage
+--------------------------------------------------
+```go
+m, err := New(connUrl, dbname, workerUniqueId, lockExpiryTimeSecond)
+if err != nil {
+  // handle the errors, failed creating connection to mongodb
+}
+
+// this lock will automatically refresh each (lockExpiryTimeSecond - 100ms)
+mgolock, err := m.AcquireLock("some-key")
+if err != nil {
+  // failed acquiring lock, maybe some others have taken it
+  // or there is some error in-between
+}
+
+if mgolock.IsValid() {
+  // your code goes here
+  // always need to check IsValid()
+  // to ensure the lock doesn't expire even before the code starts
+}
+
+// release the lock
+// it returns nothing, as error may mean some other worker has taken it
+m.DeleteLock(mgolock)
+```
+
+See `main_test.go` for examples
 
 Queries use internally
 ------------------------------------
 **acquire_lock**: 
 
 ```
-expiryTimeSecond = 10
 db.lock.update({
   key: 'random-id', 
   $or: [
