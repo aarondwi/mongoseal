@@ -1,6 +1,8 @@
 # mgofencedlock
 Distributed locks using mongodb, with fencing
 
+[![Build Status](https://travis-ci.org/aarondwi/mgofencedlock.svg?branch=master)](https://travis-ci.org/aarondwi/mgofencedlock)
+
 Setup
 ----------------------
 Run this script below in your mongo:
