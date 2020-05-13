@@ -5,7 +5,13 @@ Distributed locks using mongodb, with fencing
 
 Setup
 ----------------------
-Run this script below in your mongo:
+Installing:
+
+```bash
+go get -u github.com/aarondwi/mgofencedlock
+```
+
+Run this script below in your mongo database:
 
 ```javascript
 db.lock.createIndex( { "Key": 1 }, { unique: true } )
