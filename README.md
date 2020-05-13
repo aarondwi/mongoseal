@@ -13,6 +13,8 @@ db.lock.createIndex( { "last_seen": 1 }, { expireAfterSeconds: 600 } )
 Notes
 -------------------------------------------------
 
+Unique index is required, to prevent multiple same keys from acquiring the lock in the database
+
 ExpireAfterSeconds is not set to remove lock directly, 
 but at much higher time than lock TTL
 
