@@ -1,48 +1,46 @@
-# mgofencedlock
+# mongoseal
 Distributed locks using mongodb, with fencing
 
-[![Build Status](https://travis-ci.org/aarondwi/mgofencedlock.svg?branch=master)](https://travis-ci.org/aarondwi/mgofencedlock)
+[![Build Status](https://travis-ci.org/aarondwi/mongoseal.svg?branch=master)](https://travis-ci.org/aarondwi/mongoseal)
 
 Setup
 ----------------------
 Installing:
 
 ```bash
-go get -u github.com/aarondwi/mgofencedlock
+go get -u github.com/aarondwi/mongoseal
 ```
 
-Run this script below in your mongo database:
-
+Run this script below in your mongo database
 ```javascript
 db.lock.createIndex( { "Key": 1 }, { unique: true } )
 db.lock.createIndex( { "last_seen": 1 }, { expireAfterSeconds: 600 } )
 ```
 
+The 1st one is required, to ensure key uniqueness
+The 2nd one is used to remove old entry that are not deleted (maybe because of latency, process died, etc). The `expireAfterSeconds` should be set to duration considered safe if the lock get acquired by the 2nd or so process.
+
 Notes
 -------------------------------------------------
+Even though this distributed lock implementation use fencing, but fencing without application specific semantic may still fail to provide exclusivity (see comments [here]https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html). 
+The goal of 2 types of timeouts (database level expire and application level timeout) are different:
+1. the database level expire to ensure the storage requirement does not grow unbounded. Consider setting this value to a number considered safe if 2 workers hold the locks
+2. the application level timeout mainly used for generating fencing token. Here, multiple workers can still hold the locks, but you have fencing token (from `lock.Version`) to be used for checking at storage/database level.
 
-Unique index is required, to prevent multiple same keys from acquiring the lock in the database
+100ms before lock timeouts, it will refresh the lock automatically.The time resolution for lock expiry time is 1 second, to reduce errors caused by NTP ~250ms bound
 
-ExpireAfterSeconds is not set to remove lock directly, 
-but at much higher time than lock TTL
-
-This is used to implement fencing token generation,
-and getting out of really small timing issue which restarts the version
-It is also for not bloating the storage, in case it is not deleted normally
-
-You will need to the above function manually
-While doing that, you can also change default expiry to meet your use case
-
-100ms before lock timeouts, it will refresh the lock automatically.
-
-The time resolution for lock expiry time is 1 second, to reduce errors caused
-by NTP ~250ms bound
-
-All of the read/write operation are using `majority` concern
+Both read and write are using `majority` concern
 
 Usage
 --------------------------------------------------
 ```go
+// lockExpiryTimeSecond should be set to be far more 
+// than required duration of a process
+//
+// For example, if your code gonna need 10s for processing
+// and 1s to save it to db or others
+// set the expiryTimeSecond to be more than 11s, preferably around 20s
+// to add buffer for process pause, network delay, etc
 m, err := New(connUrl, dbname, workerUniqueId, lockExpiryTimeSecond)
 if err != nil {
   // handle the errors, failed creating connection to mongodb
@@ -61,10 +59,13 @@ if mgolock.IsValid() {
   // to ensure the lock doesn't expire even before the code starts
   // can't do anything if the lock becomes invalid in the middle of your code
   // see https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html
+
+  // dont forget to use fencingToken to make your application safer
+  fencingToken := mgolock.Version
 }
 
 // release the lock
-// it returns nothing, as error may mean some other worker has taken it
+// it returns nothing, as error may mean some other workers has taken the lock already
 m.DeleteLock(mgolock)
 ```
 
@@ -73,7 +74,6 @@ See `main_test.go` for examples
 Queries use internally
 ------------------------------------
 **acquire_lock**: 
-
 ```
 db.lock.update({
   key: 'random-id', 
@@ -87,19 +87,16 @@ db.lock.update({
 ```
 
 **get_lock_data**:
-
 ```
 db.lock.find({key: 'random-id', 'owner': 'me'}, {_id: 0})
 ```
 
 **delete_lock**:
-
 ```
 db.lock.remove({key: 'random-id', 'owner': 'me', version: 1})
 ```
 
 **refresh_lock**:
-
 ```
 db.lock.update(
   {key: 'random-id', 'owner': 'me', version: 1},

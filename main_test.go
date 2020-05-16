@@ -1,4 +1,4 @@
-package mgofencedlock
+package mongoseal
 
 import (
 	"context"
@@ -123,7 +123,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 }
 
 func TestIncreaseVersion(t *testing.T) {
-	m, err := New("mongodb://mgo:mgo@localhost:27017/?writeConcern=majority&readConcern=majority", "mgo", "ownerID", 2)
+	m, err := New("mongodb://mgo:mgo@localhost:27017/", "mgo", "ownerID", 2)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}

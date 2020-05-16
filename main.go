@@ -1,4 +1,4 @@
-package mgofencedlock
+package mongoseal
 
 import (
 	"context"
@@ -37,8 +37,8 @@ func (m *MgoLock) updateValidity(status bool) {
 	m.isValid = status
 }
 
-// MgoFencedLock is the core object to create by user
-type MgoFencedLock struct {
+// Mongoseal is the core object to create by user
+type Mongoseal struct {
 	client           *mongo.Client
 	lockColl         *mongo.Collection
 	ctx              context.Context
@@ -47,12 +47,12 @@ type MgoFencedLock struct {
 	expiryTimeSecond int64
 }
 
-// New creates our new MgoFencedLock
+// New creates our new Mongoseal
 func New(
 	connectionURL string,
 	dbname string,
 	ownerID string,
-	expiryTimeSecond int64) (*MgoFencedLock, error) {
+	expiryTimeSecond int64) (*Mongoseal, error) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	client, _ := mongo.Connect(
@@ -68,7 +68,7 @@ func New(
 	}
 
 	coll := client.Database(dbname).Collection("lock")
-	return &MgoFencedLock{
+	return &Mongoseal{
 		client:           client,
 		lockColl:         coll,
 		ctx:              ctx,
@@ -79,7 +79,7 @@ func New(
 }
 
 // Close the connection to mongo
-func (m *MgoFencedLock) Close() {
+func (m *Mongoseal) Close() {
 	if m.client != nil {
 		m.client.Disconnect(m.ctx)
 	}
@@ -88,7 +88,7 @@ func (m *MgoFencedLock) Close() {
 
 // AcquireLock creates lock records on mongodb
 // and fetch the record to return to users
-func (m *MgoFencedLock) AcquireLock(key string) (*MgoLock, error) {
+func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 	currentTime := time.Now().Unix()
 	filter := bson.D{
 		bson.E{Key: "Key", Value: key},
@@ -141,7 +141,7 @@ func (m *MgoFencedLock) AcquireLock(key string) (*MgoLock, error) {
 	return &mgolock, nil
 }
 
-func (m *MgoFencedLock) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
+func (m *Mongoseal) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
 	// 100ms before the lock is considered stale, we refresh
 	// also act as buffer to reduce margin of error
 	ticker := time.NewTicker(
@@ -179,7 +179,7 @@ func (m *MgoFencedLock) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
 
 // DeleteLock removes the record lock from mongodb
 // Returns nothing, as error may mean the lock has been taken by others
-func (m *MgoFencedLock) DeleteLock(mgolock *MgoLock) {
+func (m *Mongoseal) DeleteLock(mgolock *MgoLock) {
 	if mgolock.IsValid() {
 		mgolock.updateValidity(false)
 		filter := bson.D{

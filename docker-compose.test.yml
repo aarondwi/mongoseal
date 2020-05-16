@@ -1,7 +1,7 @@
 version: '3.1'
 
 services:
-  mgo-fencedlock:
+  mongoseal:
     container_name: mgo
     image: mongo
     restart: always
