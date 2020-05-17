@@ -24,7 +24,6 @@ services:
 
   setup_rs:
     container_name: setup_rs
-    command: sleep 3600
     build: ./
     depends_on: 
       - 'mgo1'

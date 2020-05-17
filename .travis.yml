@@ -12,10 +12,11 @@ before_install:
   - sudo sh -c "echo '\n127.0.0.1\tmgo1' >> /etc/hosts"
   - sudo sh -c "echo '\n127.0.0.1\tmgo2' >> /etc/hosts"
   - sudo sh -c "echo '\n127.0.0.1\tmgo3' >> /etc/hosts"
-  - docker-compose -f ./test/docker-compose.yml up -d
+  - docker-compose -f ./test/docker-compose.yml up --build -d
 
 script: 
-  - go test .
+  - sleep 60 # wait for mongo cluster to finish setup
+  - go test -timeout 10s .
 
 after_script:
   - docker-compose -f ./test/docker-compose.yml down
