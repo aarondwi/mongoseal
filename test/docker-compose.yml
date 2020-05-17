@@ -1,0 +1,32 @@
+version: '3.1'
+
+services:
+  mgo1:
+    container_name: mgo1
+    command: --replSet rs --bind_ip_all --port 27017
+    image: mongo
+    ports:
+      - "27017:27017"
+
+  mgo2:
+    container_name: mgo2
+    command: --replSet rs --bind_ip_all --port 27018
+    image: mongo
+    ports:
+      - "27018:27018"
+
+  mgo3:
+    container_name: mgo3
+    command: --replSet rs --bind_ip_all --port 27019
+    image: mongo
+    ports:
+      - "27019:27019"
+
+  setup_rs:
+    container_name: setup_rs
+    command: sleep 3600
+    build: ./
+    depends_on: 
+      - 'mgo1'
+      - 'mgo2'
+      - 'mgo3'

@@ -8,10 +8,14 @@ branches:
     - master
 
 before_install:
-  - docker-compose -f docker-compose.test.yml up -d
+  # this 3 domain name use for searching docker container
+  - sudo sh -c "echo '\n127.0.0.1\tmgo1' >> /etc/hosts"
+  - sudo sh -c "echo '\n127.0.0.1\tmgo2' >> /etc/hosts"
+  - sudo sh -c "echo '\n127.0.0.1\tmgo3' >> /etc/hosts"
+  - docker-compose -f ./test/docker-compose.test.yml up -d
 
 script: 
   - go test .
 
 after_script:
-  - docker-compose -f docker-compose.test.yml down
+  - docker-compose -f ./test/docker-compose.test.yml down

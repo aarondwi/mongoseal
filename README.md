@@ -29,7 +29,7 @@ The goal of 2 types of timeouts (database level expire and application level tim
 
 100ms before lock timeouts, it will refresh the lock automatically.The time resolution for lock expiry time is 1 second, to reduce errors caused by NTP ~250ms bound
 
-Both read and write are using `majority` concern
+Write operations are using `majority` concern, while read operations are using `linearizable`. Because of this, ensure that your mongo is a replica set, not a standalone. 
 
 Usage
 --------------------------------------------------

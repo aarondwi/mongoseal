@@ -1,7 +1,6 @@
 package mongoseal
 
 import (
-	"context"
 	"log"
 	"testing"
 	"time"
@@ -10,16 +9,11 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	m, err := New("mongodb://mgo:mgo@localhost:27017/", "mgo", "ownerID", 2000)
+	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 2000)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
-	defer m.Close()
-
-	err = m.client.Ping(context.TODO(), nil)
-	if err != nil {
-		t.Fatalf("Error creating connection and ping mongodb: %v", err)
-	}
+	m.Close()
 }
 
 func TestNewFailed(t *testing.T) {
@@ -30,7 +24,7 @@ func TestNewFailed(t *testing.T) {
 }
 
 func TestAcquireRefreshDelete(t *testing.T) {
-	m, err := New("mongodb://mgo:mgo@localhost:27017/", "mgo", "ownerID", 2)
+	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 2)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
@@ -123,7 +117,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 }
 
 func TestIncreaseVersion(t *testing.T) {
-	m, err := New("mongodb://mgo:mgo@localhost:27017/", "mgo", "ownerID", 2)
+	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 2)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}

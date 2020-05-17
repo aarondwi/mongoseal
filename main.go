@@ -48,6 +48,8 @@ type Mongoseal struct {
 }
 
 // New creates our new Mongoseal
+// the connection will use `majority` write concern
+// and `linearizable` read concern
 func New(
 	connectionURL string,
 	dbname string,
@@ -57,10 +59,11 @@ func New(
 
 	client, _ := mongo.Connect(
 		ctx,
+		options.Client().SetAppName("mongoseal"),
 		options.Client().ApplyURI(connectionURL),
 		options.Client().SetWriteConcern(writeconcern.New(writeconcern.WMajority())),
-		options.Client().SetReadConcern(readconcern.Majority()))
-	err := client.Ping(ctx, readpref.Primary())
+		options.Client().SetReadConcern(readconcern.Linearizable()))
+	err := client.Ping(ctx, readpref.Nearest())
 	if err != nil {
 		log.Printf("Failed connecting to mongo: %v", err)
 		cancelFunc()
