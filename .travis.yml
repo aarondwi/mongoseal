@@ -15,7 +15,7 @@ before_install:
   - docker-compose -f ./test/docker-compose.yml up --build -d
 
 script: 
-  - sleep 60 # wait for mongo cluster to finish setup
+  - sleep 60 | echo "wait for mongo cluster to finish setup"
   - go test -timeout 10s .
 
 after_script:

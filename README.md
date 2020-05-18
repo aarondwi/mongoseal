@@ -22,7 +22,7 @@ The 2nd one is used to remove old entry that are not deleted (maybe because of l
 
 Notes
 -------------------------------------------------
-Even though this distributed lock implementation use fencing, but fencing without application specific semantic may still fail to provide exclusivity (see comments [here]https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html). 
+Even though this distributed lock implementation use fencing, but fencing without application specific semantic may still fail to provide exclusivity (see comments [here](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)). 
 The goal of 2 types of timeouts (database level expire and application level timeout) are different:
 1. the database level expire to ensure the storage requirement does not grow unbounded. Consider setting this value to a number considered safe if 2 workers hold the locks
 2. the application level timeout mainly used for generating fencing token. Here, multiple workers can still hold the locks, but you have fencing token (from `lock.Version`) to be used for checking at storage/database level.
