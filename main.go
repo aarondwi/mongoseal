@@ -26,6 +26,8 @@ type MgoLock struct {
 }
 
 // IsValid handle goroutine-safe checking of isValid
+//
+// should be checked before running your lock-protected code
 func (m *MgoLock) IsValid() bool {
 	m.Lock()
 	defer m.Unlock()
@@ -38,6 +40,9 @@ func (m *MgoLock) updateValidity(status bool) {
 }
 
 // Mongoseal is the core object to create by user
+//
+// this object is a factory, which means
+// you can create lots of lock from this factory
 type Mongoseal struct {
 	client           *mongo.Client
 	lockColl         *mongo.Collection
@@ -50,6 +55,11 @@ type Mongoseal struct {
 // New creates our new Mongoseal
 // the connection will use `majority` write concern
 // and `linearizable` read concern
+//
+// It has an owner id, which can be just a random string
+//
+// It also creates a `context.Background()`
+// which all lock objects created later is based of
 func New(
 	connectionURL string,
 	dbname string,
@@ -82,6 +92,8 @@ func New(
 }
 
 // Close the connection to mongo
+//
+// Also cancel the context, sto cancel all child locks
 func (m *Mongoseal) Close() {
 	if m.client != nil {
 		m.client.Disconnect(m.ctx)
@@ -91,6 +103,9 @@ func (m *Mongoseal) Close() {
 
 // AcquireLock creates lock records on mongodb
 // and fetch the record to return to users
+//
+// In the background, it also creates a goroutine which
+// periodically refresh lock validity, until the lock is deleted
 func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 	currentTime := time.Now().Unix()
 	filter := bson.D{
@@ -181,6 +196,7 @@ func (m *Mongoseal) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
 }
 
 // DeleteLock removes the record lock from mongodb
+//
 // Returns nothing, as error may mean the lock has been taken by others
 func (m *Mongoseal) DeleteLock(mgolock *MgoLock) {
 	if mgolock.IsValid() {
@@ -190,6 +206,6 @@ func (m *Mongoseal) DeleteLock(mgolock *MgoLock) {
 			bson.E{Key: "Key", Value: mgolock.Key},
 			bson.E{Key: "Version", Value: mgolock.Version}}
 		m.lockColl.DeleteOne(mgolock.ctx, filter)
+		mgolock.cancelFunc()
 	}
-	mgolock.cancelFunc()
 }

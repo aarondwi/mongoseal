@@ -2,6 +2,9 @@
 Distributed locks using mongodb, with fencing
 
 [![Build Status](https://travis-ci.org/aarondwi/mongoseal.svg?branch=master)](https://travis-ci.org/aarondwi/mongoseal)
+[![Go Report Card](https://goreportcard.com/badge/github.com/aarondwi/mongoseal)](https://goreportcard.com/report/github.com/aarondwi/mongoseal)
+[![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg?style=flat)](https://godoc.org/github.com/aarondwi/mongoseal) 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Setup
 ----------------------
