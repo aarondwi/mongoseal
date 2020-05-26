@@ -25,7 +25,7 @@ type MgoLock struct {
 	cancelFunc context.CancelFunc
 }
 
-// IsValid handle goroutine-safe checking of isValid
+// IsValid handle goroutine-safe checking of lock's validity
 //
 // should be checked before running your lock-protected code
 func (m *MgoLock) IsValid() bool {
@@ -52,12 +52,11 @@ type Mongoseal struct {
 	expiryTimeSecond int64
 }
 
-// New creates our new Mongoseal
-// the connection will use `majority` write concern
+// New creates our new Mongoseal.
+// The connection will use `majority` write concern
 // and `linearizable` read concern
 //
-// It has an owner id, which can be just a random string
-//
+// It has an owner id, which can be just a random string.
 // It also creates a `context.Background()`
 // which all lock objects created later is based of
 func New(
@@ -93,7 +92,7 @@ func New(
 
 // Close the connection to mongo
 //
-// Also cancel the context, sto cancel all child locks
+// Also cancel the context, stopping all child locks
 func (m *Mongoseal) Close() {
 	if m.client != nil {
 		m.client.Disconnect(m.ctx)
