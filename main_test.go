@@ -1,6 +1,7 @@
 package mongoseal
 
 import (
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -43,7 +44,6 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		mgolock, err := m.AcquireLock(mainKey)
 		if err != nil {
 			log.Fatalf("Failed Getting Lock when no lock exists: %v", err)
-			t.Fail()
 		}
 		defer m.DeleteLock(mgolock)
 		log.Printf("goroutines 1 hold the key: %s", mainKey)
@@ -51,14 +51,11 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		time.Sleep(1 * time.Second) // second 1
 		if !mgolock.IsValid() {
 			log.Fatalf("The lock acquired should still be valid but it is not: %v", err)
-			t.Fail()
 		}
 
 		time.Sleep(2 * time.Second) // second 3
 		if !mgolock.IsValid() {
-			log.Fatal("Should have refreshed the lock, but it has not")
-			log.Fatalf("The lock acquired should still be valid but it is not: %v", err)
-			t.Fail()
+			log.Fatalf("Should have refreshed the lock, but it has not, with error: %v", err)
 		}
 
 		// at 3.25 we delete the key
@@ -67,7 +64,6 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		time.Sleep(1000 * time.Millisecond)
 		if mgolock.IsValid() {
 			log.Fatal("Should have not refreshed the lock, but it has")
-			t.Fail()
 		}
 		endChan <- true
 	}(endChan)
@@ -81,7 +77,6 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		_, err := m.AcquireLock(mainKey)
 		if err == nil {
 			log.Fatal("This call should fail but it is not")
-			t.Fail()
 		}
 		log.Print("Goroutine 2 correctly did not accept a valid lock")
 		return
@@ -95,7 +90,6 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		mgolock, err := m.AcquireLock(otherKey)
 		if err != nil {
 			log.Fatalf("Failed getting different key from those lock existing: %v", err)
-			t.Fail()
 		}
 		if !mgolock.IsValid() {
 			log.Fatal("Another key not exists should be valid but is not")
@@ -133,13 +127,11 @@ func TestIncreaseVersion(t *testing.T) {
 		mgolock, err := m.AcquireLock(versionUpgradeKey)
 		if err != nil {
 			log.Fatal("This call should not fail but it is")
-			t.Fail()
 		}
 		defer m.DeleteLock(mgolock)
 
 		if mgolock.Version != 2 {
 			log.Fatalf("The lock should be at version 2 but it is not, it is %d", mgolock.Version)
-			t.Fail()
 		}
 		endChan <- true
 	}(endChan)
@@ -150,12 +142,51 @@ func TestIncreaseVersion(t *testing.T) {
 		bson.E{Key: "owner", Value: m.ownerID},
 		bson.E{Key: "last_seen", Value: time.Now().Unix()},
 	}
-	res, err := m.lockColl.InsertOne(m.ctx, docs)
+	_, err = m.lockColl.InsertOne(m.ctx, docs)
 	if err != nil {
 		log.Fatalf("Failed simulating dummy version 1 key: %v", err)
 	}
-	log.Print(res)
 	defer m.lockColl.DeleteOne(m.ctx,
 		bson.D{bson.E{Key: "Key", Value: versionUpgradeKey}})
 	<-endChan
+}
+
+func BenchmarkAcquireReleaseLock(b *testing.B) {
+	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 10)
+	if err != nil {
+		b.Fatalf("Failed creating mongohandler: %v", err)
+	}
+	defer m.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// no need to benchmark the key creation
+		// b.StopTimer()
+		keyName := fmt.Sprintf("key_%d", i+1)
+		// b.StartTimer()
+
+		mgolock, err := m.AcquireLock(keyName)
+		if err != nil {
+			log.Fatalf("Failed Getting Lock when no lock exists: %v", err)
+		}
+		m.DeleteLock(mgolock)
+	}
+	b.StopTimer()
+}
+
+func BenchmarkMongoBsonImpl(b *testing.B) {
+	x := make([]interface{}, 10000000)
+	for i := 0; i < b.N; i++ {
+		a := bson.D{
+			bson.E{Key: "$inc", Value: bson.M{"Version": 1}},
+			bson.E{
+				Key: "$set",
+				Value: bson.D{
+					bson.E{Key: "owner", Value: "ownerId"},
+					bson.E{Key: "last_seen", Value: 1000000},
+				}},
+		}
+		x = append(x, a)
+	}
+	fmt.Println(len(x))
 }

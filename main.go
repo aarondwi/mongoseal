@@ -39,10 +39,8 @@ func (m *MgoLock) updateValidity(status bool) {
 	m.isValid = status
 }
 
-// Mongoseal is the core object to create by user
-//
-// this object is a factory, which means
-// you can create lots of lock from this factory
+// Mongoseal is the core object to create by user,
+// returning a factory that creates the lock
 type Mongoseal struct {
 	client           *mongo.Client
 	lockColl         *mongo.Collection
@@ -50,6 +48,12 @@ type Mongoseal struct {
 	cancelFunc       context.CancelFunc
 	ownerID          string
 	expiryTimeSecond int64
+}
+
+var mgoLockPool = &sync.Pool{
+	New: func() interface{} {
+		return &MgoLock{}
+	},
 }
 
 // New creates our new Mongoseal.
@@ -100,6 +104,8 @@ func (m *Mongoseal) Close() {
 	m.cancelFunc()
 }
 
+var upsertOption = options.Update().SetUpsert(true)
+
 // AcquireLock creates lock records on mongodb
 // and fetch the record to return to users
 //
@@ -129,17 +135,14 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 			}},
 	}
 	_, err := m.lockColl.UpdateOne(
-		m.ctx, filter, update,
-		options.Update().SetUpsert(true))
+		m.ctx, filter, update, upsertOption)
 
 	if err != nil {
 		log.Printf("Failed Upserting lock into mongo: %v", err)
-		log.Print(currentTime)
-		log.Print(currentTime - m.expiryTimeSecond)
 		return nil, err
 	}
 
-	var mgolock MgoLock
+	mgolock := mgoLockPool.Get().(*MgoLock)
 	ctx, cancelFunc := context.WithCancel(m.ctx)
 	mgolock.ctx = ctx
 	mgolock.cancelFunc = cancelFunc
@@ -147,15 +150,16 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 	filter = bson.D{
 		bson.E{Key: "owner", Value: m.ownerID},
 		bson.E{Key: "Key", Value: key}}
-	err = m.lockColl.FindOne(mgolock.ctx, filter).Decode(&mgolock)
+	err = m.lockColl.FindOne(mgolock.ctx, filter).
+		Decode(mgolock)
 	if err != nil {
-		log.Printf("Just written lock not found %v", err)
+		log.Printf("Just written lock not found, with error: %v", err)
 		return nil, err
 	}
-
 	mgolock.updateValidity(true)
-	go m.refreshLock(&mgolock, m.expiryTimeSecond)
-	return &mgolock, nil
+
+	go m.refreshLock(mgolock, m.expiryTimeSecond)
+	return mgolock, nil
 }
 
 func (m *Mongoseal) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
@@ -207,4 +211,5 @@ func (m *Mongoseal) DeleteLock(mgolock *MgoLock) {
 		m.lockColl.DeleteOne(mgolock.ctx, filter)
 		mgolock.cancelFunc()
 	}
+	mgoLockPool.Put(mgolock)
 }

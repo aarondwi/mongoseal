@@ -1,4 +1,5 @@
 # mongoseal
+
 Distributed locks using mongodb, with fencing
 
 [![Build Status](https://travis-ci.org/aarondwi/mongoseal.svg?branch=master)](https://travis-ci.org/aarondwi/mongoseal)
@@ -14,28 +15,32 @@ Installing:
 go get -u github.com/aarondwi/mongoseal
 ```
 
-Run this script below in your mongo database
+Run this script below in your mongodb
+
 ```javascript
 db.lock.createIndex( { "Key": 1 }, { unique: true } )
 db.lock.createIndex( { "last_seen": 1 }, { expireAfterSeconds: 600 } )
 ```
 
 The 1st one is required, to ensure key uniqueness
+
 The 2nd one is used to remove old entry that are not deleted (maybe because of latency, process died, etc). The `expireAfterSeconds` should be set to duration considered safe if the lock get acquired by the 2nd or so process.
 
 Notes
 -------------------------------------------------
-Even though this distributed lock implementation use fencing, but fencing without application specific semantic may still fail to provide exclusivity (see comments [here](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)). 
+Even though this distributed lock implementation use fencing, but fencing without application specific semantic may still fail to provide exclusivity (see comments [here](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)).
 The goal of 2 types of timeouts (database level expire and application level timeout) are different:
+
 1. the database level expire to ensure the storage requirement does not grow unbounded. Consider setting this value to a number considered safe if 2 workers hold the locks
 2. the application level timeout mainly used for generating fencing token. Here, multiple workers can still hold the locks, but you have fencing token (from `lock.Version`) to be used for checking at storage/database level.
 
-100ms before lock timeouts, it will refresh the lock automatically.The time resolution for lock expiry time is 1 second, to reduce errors caused by NTP ~250ms bound
+100ms before lock timeouts, it will refresh the lock automatically. The time resolution for lock expiry time is 1 second, to reduce errors caused by NTP ~250ms bound
 
-Write operations are using `majority` concern, while read operations are using `linearizable`. Because of this, ensure that your mongo is a replica set, not a standalone. 
+Write operations are using `majority` concern, while read operations are using `linearizable`. Because of this, ensure that your mongo is a replica set, not a standalone.
 
 Usage
 --------------------------------------------------
+
 ```go
 // lockExpiryTimeSecond should be set to be far more 
 // than required duration of a process
@@ -76,31 +81,35 @@ See `main_test.go` for examples
 
 Queries use internally
 ------------------------------------
-**acquire_lock**: 
-```
+**acquire_lock**:
+
+```javascript
 db.lock.update({
-  key: 'random-id', 
+  key: 'random-id',
   $or: [
-    {last_seen: null}, 
+    {last_seen: null},
     {last_seen: {$lt: new Date() - expiryTimeSecond}}]
 }, {
-  $inc: {version: 1}, 
-  $set:{'owner': 'me', last_seen: new Date()}}, 
+  $inc: {version: 1},
+  $set:{'owner': 'me', last_seen: new Date()}},
 {upsert: true})
 ```
 
 **get_lock_data**:
-```
+
+```javascript
 db.lock.find({key: 'random-id', 'owner': 'me'}, {_id: 0})
 ```
 
 **delete_lock**:
-```
+
+```javascript
 db.lock.remove({key: 'random-id', 'owner': 'me', version: 1})
 ```
 
 **refresh_lock**:
-```
+
+```javascript
 db.lock.update(
   {key: 'random-id', 'owner': 'me', version: 1},
   {$set: {last_seen: new Date()}}
@@ -109,6 +118,7 @@ db.lock.update(
 
 Document Schema
 -------------------------
+
 ```json
 {
   "version": 1,
