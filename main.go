@@ -39,35 +39,39 @@ func (m *MgoLock) updateValidity(status bool) {
 	m.isValid = status
 }
 
-// Mongoseal is the core object to create by user,
-// returning a factory that creates the lock
-type Mongoseal struct {
-	client           *mongo.Client
-	lockColl         *mongo.Collection
-	ctx              context.Context
-	cancelFunc       context.CancelFunc
-	ownerID          string
-	expiryTimeSecond int64
-}
-
 var mgoLockPool = &sync.Pool{
 	New: func() interface{} {
 		return &MgoLock{}
 	},
 }
 
-// New creates our new Mongoseal.
+// Mongoseal is the core object to create by user,
+// returning a factory that creates the lock
+type Mongoseal struct {
+	client                       *mongo.Client
+	lockColl                     *mongo.Collection
+	ctx                          context.Context
+	cancelFunc                   context.CancelFunc
+	ownerID                      string
+	expiryTimeSecond             int64
+	needRefresh                  bool
+	remainingBeforeRefreshSecond int64
+}
+
+// NewMongoseal creates our new Mongoseal.
 // The connection will use `majority` write concern
 // and `linearizable` read concern
 //
 // It has an owner id, which can be just a random string.
 // It also creates a `context.Background()`
 // which all lock objects created later is based of
-func New(
+func NewMongoseal(
 	connectionURL string,
 	dbname string,
 	ownerID string,
-	expiryTimeSecond int64) (*Mongoseal, error) {
+	expiryTimeSecond int64,
+	needRefresh bool,
+	remainingBeforeRefreshSecond int64) (*Mongoseal, error) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	client, _ := mongo.Connect(
@@ -83,14 +87,20 @@ func New(
 		return nil, err
 	}
 
+	if remainingBeforeRefreshSecond <= 0 {
+		remainingBeforeRefreshSecond = 1
+	}
+
 	coll := client.Database(dbname).Collection("lock")
 	return &Mongoseal{
-		client:           client,
-		lockColl:         coll,
-		ctx:              ctx,
-		cancelFunc:       cancelFunc,
-		ownerID:          ownerID,
-		expiryTimeSecond: expiryTimeSecond,
+		client:                       client,
+		lockColl:                     coll,
+		ctx:                          ctx,
+		cancelFunc:                   cancelFunc,
+		ownerID:                      ownerID,
+		expiryTimeSecond:             expiryTimeSecond,
+		needRefresh:                  needRefresh,
+		remainingBeforeRefreshSecond: remainingBeforeRefreshSecond,
 	}, nil
 }
 
@@ -119,10 +129,12 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 			Key: "$or",
 			Value: bson.A{
 				bson.D{bson.E{Key: "last_seen", Value: nil}},
-				bson.D{bson.E{Key: "last_seen",
-					// resolution unit is second
-					// reducing the chance from ntp ~250ms error
-					Value: bson.M{"$lt": currentTime - m.expiryTimeSecond}}},
+				bson.D{
+					bson.E{
+						Key: "last_seen",
+						// resolution unit is second
+						// reducing the chance from ntp ~250ms uncertainty
+						Value: bson.M{"$lt": currentTime - m.expiryTimeSecond}}},
 			}},
 	}
 	update := bson.D{
@@ -158,16 +170,64 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 	}
 	mgolock.updateValidity(true)
 
-	go m.refreshLock(mgolock, m.expiryTimeSecond)
+	go m.refreshLock(mgolock)
 	return mgolock, nil
 }
 
-func (m *Mongoseal) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
-	// 100ms before the lock is considered stale, we refresh
-	// also act as buffer to reduce margin of error
-	ticker := time.NewTicker(
-		time.Duration((expiryTimeSecond*1000)-100) *
-			time.Millisecond)
+// doRefreshLockOnMongo is a helper function
+// because we need to call refresh on 2 separate places
+func (m *Mongoseal) doRefreshLockOnMongo(mgolock *MgoLock) (*mongo.UpdateResult, error) {
+	filter := bson.D{
+		bson.E{Key: "owner", Value: m.ownerID},
+		bson.E{Key: "Key", Value: mgolock.Key},
+		bson.E{Key: "Version", Value: mgolock.Version}}
+	update := bson.D{
+		bson.E{
+			Key:   "$inc",
+			Value: bson.M{"last_seen": m.expiryTimeSecond},
+		}}
+	return m.lockColl.UpdateOne(mgolock.ctx, filter, update)
+}
+
+// refreshLock periodically refresh the lock, to keep it alive
+// defined by `expiryTimeSecond` and `remainingBeforeRefreshSecond`
+//
+// the logic is that
+// we want to wait until `remainingBeforeRefreshSecond` before running the first,
+// then do again in loop after each `expiryTimeSecond`
+//
+// Can not return mgoLock to pool here
+// because the user may be still has references to the object
+func (m *Mongoseal) refreshLock(mgolock *MgoLock) {
+	if !m.needRefresh {
+		time.Sleep(
+			time.Duration(m.expiryTimeSecond) *
+				time.Second)
+		mgolock.updateValidity(false)
+		return
+	}
+
+	time.Sleep(time.Duration(m.expiryTimeSecond-m.remainingBeforeRefreshSecond) * time.Second)
+
+	ticker := time.NewTicker(time.Duration(m.expiryTimeSecond) * time.Second)
+
+	// need to exactly copy this
+	// because we want it to run when the diff is reached
+	select {
+	case <-mgolock.ctx.Done():
+		mgolock.updateValidity(false)
+		return
+	default:
+		result, err := m.doRefreshLockOnMongo(mgolock)
+		if err != nil ||
+			(result.MatchedCount == 0 &&
+				result.ModifiedCount == 0 &&
+				result.UpsertedCount == 0) {
+			time.Sleep(time.Duration(m.remainingBeforeRefreshSecond) * time.Second)
+			mgolock.updateValidity(false)
+			return
+		}
+	}
 
 	for {
 		select {
@@ -175,22 +235,12 @@ func (m *Mongoseal) refreshLock(mgolock *MgoLock, expiryTimeSecond int64) {
 			mgolock.updateValidity(false)
 			return
 		case <-ticker.C:
-			log.Printf("Refreshing the lock with key: %s", mgolock.Key)
-			filter := bson.D{
-				bson.E{Key: "owner", Value: m.ownerID},
-				bson.E{Key: "Key", Value: mgolock.Key},
-				bson.E{Key: "Version", Value: mgolock.Version}}
-			update := bson.D{
-				bson.E{
-					Key: "$set",
-					Value: bson.E{
-						Key:   "last_seen",
-						Value: time.Now().Unix()}}}
-			result, err := m.lockColl.UpdateOne(mgolock.ctx, filter, update)
+			result, err := m.doRefreshLockOnMongo(mgolock)
 			if err != nil ||
 				(result.MatchedCount == 0 &&
 					result.ModifiedCount == 0 &&
 					result.UpsertedCount == 0) {
+				time.Sleep(time.Duration(m.remainingBeforeRefreshSecond) * time.Second)
 				mgolock.updateValidity(false)
 				return
 			}

@@ -10,22 +10,28 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 2000)
+	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+		"mgo", "ownerID", 2, false, -1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
+	}
+	if m.remainingBeforeRefreshSecond != 1 {
+		t.Fatal("When negative, should be set to 1, but it is not")
 	}
 	m.Close()
 }
 
 func TestNewFailed(t *testing.T) {
-	_, err := New("mongodb://notexist:notexist@localhost:27017/", "mgo", "ownerID", 2000)
+	_, err := NewMongoseal("mongodb://notexist:notexist@localhost:27017/",
+		"mgo", "ownerID", 2, false, 1)
 	if err == nil {
 		t.Fatalf("Creating connection should fail but it is not")
 	}
 }
 
 func TestAcquireRefreshDelete(t *testing.T) {
-	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 2)
+	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+		"mgo", "ownerID", 3, true, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
@@ -53,15 +59,24 @@ func TestAcquireRefreshDelete(t *testing.T) {
 			log.Fatalf("The lock acquired should still be valid but it is not: %v", err)
 		}
 
-		time.Sleep(2 * time.Second) // second 3
+		// at 3.25 we delete the key.
+		// but below should still be valid,
+		// because it is refreshed at 2
+		// and will be valid till 6
+		time.Sleep(2500 * time.Millisecond) // second 3.5
 		if !mgolock.IsValid() {
 			log.Fatalf("Should have refreshed the lock, but it has not, with error: %v", err)
 		}
 
-		// at 3.25 we delete the key
-		// so at 3.8 should fail to re-obtain the lock
-		// and at 4.1 it is no longer valid
-		time.Sleep(1000 * time.Millisecond)
+		// At 5 should fail to re-obtain the lock
+		// but still valid at 5.05
+		time.Sleep(1550 * time.Millisecond)
+		if !mgolock.IsValid() {
+			log.Fatal("Should still be valid, but it is not")
+		}
+
+		// and at 6.05 it is no longer valid
+		time.Sleep(1 * time.Second)
 		if mgolock.IsValid() {
 			log.Fatal("Should have not refreshed the lock, but it has")
 		}
@@ -69,7 +84,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 	}(endChan)
 
 	// goroutine 2 simulates failure in getting the lock
-	// because the duration is 2 second
+	// because the duration is 3 second
 	// and this goroutine just wait for 1 second before acquiring with same id
 	go func() {
 		time.Sleep(1 * time.Second)
@@ -82,8 +97,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		return
 	}()
 
-	// goroutine 3 simulates successfully obtain a lock
-	// with different id
+	// goroutine 3 simulates successfully obtain a lock with different id
 	go func() {
 		time.Sleep(1 * time.Second)
 		log.Print("Goroutine 3 starts running")
@@ -110,8 +124,9 @@ func TestAcquireRefreshDelete(t *testing.T) {
 	<-endChan
 }
 
-func TestIncreaseVersion(t *testing.T) {
-	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 2)
+func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
+	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+		"mgo", "ownerID", 3, false, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
@@ -121,8 +136,7 @@ func TestIncreaseVersion(t *testing.T) {
 	endChan := make(chan bool)
 
 	go func(endChan chan bool) {
-		// unit of resolution is second
-		time.Sleep(3 * time.Second)
+		time.Sleep(4000 * time.Millisecond)
 		log.Print("Goroutine starts running")
 		mgolock, err := m.AcquireLock(versionUpgradeKey)
 		if err != nil {
@@ -132,6 +146,11 @@ func TestIncreaseVersion(t *testing.T) {
 
 		if mgolock.Version != 2 {
 			log.Fatalf("The lock should be at version 2 but it is not, it is %d", mgolock.Version)
+		}
+
+		time.Sleep(3100 * time.Millisecond)
+		if mgolock.IsValid() {
+			log.Fatal("Should have not refreshed the lock, but it has")
 		}
 		endChan <- true
 	}(endChan)
@@ -152,7 +171,8 @@ func TestIncreaseVersion(t *testing.T) {
 }
 
 func BenchmarkAcquireReleaseLock(b *testing.B) {
-	m, err := New("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs", "mgo", "ownerID", 10)
+	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+		"mgo", "ownerID", 10, false, 1)
 	if err != nil {
 		b.Fatalf("Failed creating mongohandler: %v", err)
 	}
@@ -172,21 +192,4 @@ func BenchmarkAcquireReleaseLock(b *testing.B) {
 		m.DeleteLock(mgolock)
 	}
 	b.StopTimer()
-}
-
-func BenchmarkMongoBsonImpl(b *testing.B) {
-	x := make([]interface{}, 10000000)
-	for i := 0; i < b.N; i++ {
-		a := bson.D{
-			bson.E{Key: "$inc", Value: bson.M{"Version": 1}},
-			bson.E{
-				Key: "$set",
-				Value: bson.D{
-					bson.E{Key: "owner", Value: "ownerId"},
-					bson.E{Key: "last_seen", Value: 1000000},
-				}},
-		}
-		x = append(x, a)
-	}
-	fmt.Println(len(x))
 }
