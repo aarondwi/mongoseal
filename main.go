@@ -9,9 +9,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readconcern"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 )
 
 // MgoLock is the object users get
@@ -59,13 +56,11 @@ type Mongoseal struct {
 }
 
 // NewMongoseal creates our new Mongoseal.
-// The connection will use `majority` write concern
-// and `linearizable` read concern
-//
-// It has an owner id, which can be just a random string.
+// It needs a context (gonna create one if nil passed),
+// mongoClient pointer object, and list of options
 func NewMongoseal(
 	ctx context.Context,
-	connectionURL string,
+	client *mongo.Client,
 	dbname string,
 	ownerID string,
 	expiryTimeSecond int64,
@@ -76,19 +71,6 @@ func NewMongoseal(
 		baseCtx = context.Background()
 	}
 	ctx, cancelFunc := context.WithCancel(baseCtx)
-
-	client, _ := mongo.Connect(
-		ctx,
-		options.Client().SetAppName("mongoseal"),
-		options.Client().ApplyURI(connectionURL),
-		options.Client().SetWriteConcern(writeconcern.New(writeconcern.WMajority())),
-		options.Client().SetReadConcern(readconcern.Linearizable()))
-	err := client.Ping(ctx, readpref.Nearest())
-	if err != nil {
-		log.Printf("Failed connecting to mongo: %v", err)
-		cancelFunc()
-		return nil, err
-	}
 
 	if remainingBeforeRefreshSecond <= 0 {
 		remainingBeforeRefreshSecond = 1
@@ -145,7 +127,7 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 			Key: "$set",
 			Value: bson.D{
 				bson.E{Key: "owner", Value: m.ownerID},
-				bson.E{Key: "last_seen", Value: "ISODate().getTime()"},
+				bson.E{Key: "last_seen", Value: currentTime},
 			}},
 	}
 	_, err := m.lockColl.UpdateOne(
@@ -226,7 +208,10 @@ func (m *Mongoseal) refreshLock(mgolock *MgoLock) {
 			(result.MatchedCount == 0 &&
 				result.ModifiedCount == 0 &&
 				result.UpsertedCount == 0) {
-			time.Sleep(time.Duration(m.remainingBeforeRefreshSecond) * time.Second)
+			time.Sleep(
+				time.Duration(
+					m.remainingBeforeRefreshSecond) *
+					time.Second)
 			mgolock.updateValidity(false)
 			return
 		}
@@ -243,7 +228,10 @@ func (m *Mongoseal) refreshLock(mgolock *MgoLock) {
 				(result.MatchedCount == 0 &&
 					result.ModifiedCount == 0 &&
 					result.UpsertedCount == 0) {
-				time.Sleep(time.Duration(m.remainingBeforeRefreshSecond) * time.Second)
+				time.Sleep(
+					time.Duration(
+						m.remainingBeforeRefreshSecond) *
+						time.Second)
 				mgolock.updateValidity(false)
 				return
 			}

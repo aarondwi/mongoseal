@@ -8,10 +8,38 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readconcern"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/mongo/writeconcern"
 )
 
+func setupMongoForTest(ctx context.Context, connectionURL string) (*mongo.Client, error) {
+	client, _ := mongo.Connect(
+		ctx,
+		options.Client().SetAppName("mongoseal"),
+		options.Client().ApplyURI(connectionURL),
+		options.Client().SetWriteConcern(writeconcern.New(writeconcern.WMajority())),
+		options.Client().SetReadConcern(readconcern.Linearizable()))
+	err := client.Ping(ctx, readpref.Nearest())
+	if err != nil {
+		return nil, err
+	}
+
+	return client, nil
+}
+
 func TestNew(t *testing.T) {
-	m, err := NewMongoseal(nil, "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	ctx := context.Background()
+	client, err := setupMongoForTest(ctx,
+		"mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs")
+	if err != nil {
+		log.Printf("Failed connecting to mongo: %v", err)
+	}
+	m, err := NewMongoseal(
+		ctx,
+		client,
 		"mgo", "ownerID", 2, false, -1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
@@ -25,16 +53,16 @@ func TestNew(t *testing.T) {
 	m.Close()
 }
 
-func TestNewFailed(t *testing.T) {
-	_, err := NewMongoseal(nil, "mongodb://notexist:notexist@localhost:27017/",
-		"mgo", "ownerID", 2, false, 1)
-	if err == nil {
-		t.Fatalf("Creating connection should fail but it is not")
-	}
-}
-
 func TestAcquireRefreshDelete(t *testing.T) {
-	m, err := NewMongoseal(context.Background(), "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	ctx := context.Background()
+	client, err := setupMongoForTest(ctx,
+		"mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs")
+	if err != nil {
+		log.Printf("Failed connecting to mongo: %v", err)
+	}
+	m, err := NewMongoseal(
+		ctx,
+		client,
 		"mgo", "ownerID", 3, true, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
@@ -69,7 +97,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		// and will be valid till 6
 		time.Sleep(2500 * time.Millisecond) // second 3.5
 		if !mgolock.IsValid() {
-			log.Fatalf("Should have refreshed the lock, but it has not, with error: %v", err)
+			log.Fatalf("Should have refreshed the lock and still be valid, but it has not, with error: %v", err)
 		}
 
 		// At 5 should fail to re-obtain the lock
@@ -129,7 +157,15 @@ func TestAcquireRefreshDelete(t *testing.T) {
 }
 
 func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
-	m, err := NewMongoseal(context.Background(), "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	ctx := context.Background()
+	client, err := setupMongoForTest(ctx,
+		"mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs")
+	if err != nil {
+		log.Printf("Failed connecting to mongo: %v", err)
+	}
+	m, err := NewMongoseal(
+		ctx,
+		client,
 		"mgo", "ownerID", 3, false, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
@@ -175,7 +211,15 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 }
 
 func BenchmarkAcquireReleaseLock(b *testing.B) {
-	m, err := NewMongoseal(nil, "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	ctx := context.Background()
+	client, err := setupMongoForTest(ctx,
+		"mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs")
+	if err != nil {
+		log.Printf("Failed connecting to mongo: %v", err)
+	}
+	m, err := NewMongoseal(
+		ctx,
+		client,
 		"mgo", "ownerID", 10, false, 1)
 	if err != nil {
 		b.Fatalf("Failed creating mongohandler: %v", err)
