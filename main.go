@@ -63,16 +63,19 @@ type Mongoseal struct {
 // and `linearizable` read concern
 //
 // It has an owner id, which can be just a random string.
-// It also creates a `context.Background()`
-// which all lock objects created later is based of
 func NewMongoseal(
+	ctx context.Context,
 	connectionURL string,
 	dbname string,
 	ownerID string,
 	expiryTimeSecond int64,
 	needRefresh bool,
 	remainingBeforeRefreshSecond int64) (*Mongoseal, error) {
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	baseCtx := ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancelFunc := context.WithCancel(baseCtx)
 
 	client, _ := mongo.Connect(
 		ctx,
@@ -114,8 +117,6 @@ func (m *Mongoseal) Close() {
 	m.cancelFunc()
 }
 
-var upsertOption = options.Update().SetUpsert(true)
-
 // AcquireLock creates lock records on mongodb
 // and fetch the record to return to users
 //
@@ -137,17 +138,19 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 						Value: bson.M{"$lt": currentTime - m.expiryTimeSecond}}},
 			}},
 	}
+
 	update := bson.D{
 		bson.E{Key: "$inc", Value: bson.M{"Version": 1}},
 		bson.E{
 			Key: "$set",
 			Value: bson.D{
 				bson.E{Key: "owner", Value: m.ownerID},
-				bson.E{Key: "last_seen", Value: currentTime},
+				bson.E{Key: "last_seen", Value: "ISODate().getTime()"},
 			}},
 	}
 	_, err := m.lockColl.UpdateOne(
-		m.ctx, filter, update, upsertOption)
+		m.ctx, filter, update,
+		options.Update().SetUpsert(true))
 
 	if err != nil {
 		log.Printf("Failed Upserting lock into mongo: %v", err)

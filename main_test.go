@@ -1,6 +1,7 @@
 package mongoseal
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"testing"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	m, err := NewMongoseal(nil, "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
 		"mgo", "ownerID", 2, false, -1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
@@ -18,11 +19,14 @@ func TestNew(t *testing.T) {
 	if m.remainingBeforeRefreshSecond != 1 {
 		t.Fatal("When negative, should be set to 1, but it is not")
 	}
+	if m.ctx == nil {
+		t.Fatal("It should create context.background() if nil is passed, but it is not")
+	}
 	m.Close()
 }
 
 func TestNewFailed(t *testing.T) {
-	_, err := NewMongoseal("mongodb://notexist:notexist@localhost:27017/",
+	_, err := NewMongoseal(nil, "mongodb://notexist:notexist@localhost:27017/",
 		"mgo", "ownerID", 2, false, 1)
 	if err == nil {
 		t.Fatalf("Creating connection should fail but it is not")
@@ -30,7 +34,7 @@ func TestNewFailed(t *testing.T) {
 }
 
 func TestAcquireRefreshDelete(t *testing.T) {
-	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	m, err := NewMongoseal(context.Background(), "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
 		"mgo", "ownerID", 3, true, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
@@ -125,7 +129,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 }
 
 func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
-	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	m, err := NewMongoseal(context.Background(), "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
 		"mgo", "ownerID", 3, false, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
@@ -171,7 +175,7 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 }
 
 func BenchmarkAcquireReleaseLock(b *testing.B) {
-	m, err := NewMongoseal("mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
+	m, err := NewMongoseal(nil, "mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs",
 		"mgo", "ownerID", 10, false, 1)
 	if err != nil {
 		b.Fatalf("Failed creating mongohandler: %v", err)
