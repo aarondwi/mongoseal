@@ -13,6 +13,10 @@ import (
 
 // MgoLock is the object users get
 // after lock is acquired at mongodb
+//
+// Cannot pool this object,
+// because this object, by definition, should live in 1 ctx (for refresh and delete),
+// meaning need to hold the ref to ctx
 type MgoLock struct {
 	sync.Mutex
 	Key        string
@@ -36,19 +40,11 @@ func (m *MgoLock) updateValidity(status bool) {
 	m.isValid = status
 }
 
-var mgoLockPool = &sync.Pool{
-	New: func() interface{} {
-		return &MgoLock{}
-	},
-}
-
 // Mongoseal is the core object to create by user,
 // returning a factory that creates the lock
 type Mongoseal struct {
 	client                       *mongo.Client
 	lockColl                     *mongo.Collection
-	ctx                          context.Context
-	cancelFunc                   context.CancelFunc
 	ownerID                      string
 	expiryTimeSecond             int64
 	needRefresh                  bool
@@ -59,18 +55,12 @@ type Mongoseal struct {
 // It needs a context (gonna create one if nil passed),
 // mongoClient pointer object, and list of options
 func NewMongoseal(
-	ctx context.Context,
 	client *mongo.Client,
 	dbname string,
 	ownerID string,
 	expiryTimeSecond int64,
 	needRefresh bool,
 	remainingBeforeRefreshSecond int64) (*Mongoseal, error) {
-	baseCtx := ctx
-	if baseCtx == nil {
-		baseCtx = context.Background()
-	}
-	ctx, cancelFunc := context.WithCancel(baseCtx)
 
 	if remainingBeforeRefreshSecond <= 0 {
 		remainingBeforeRefreshSecond = 1
@@ -80,8 +70,6 @@ func NewMongoseal(
 	return &Mongoseal{
 		client:                       client,
 		lockColl:                     coll,
-		ctx:                          ctx,
-		cancelFunc:                   cancelFunc,
 		ownerID:                      ownerID,
 		expiryTimeSecond:             expiryTimeSecond,
 		needRefresh:                  needRefresh,
@@ -92,19 +80,19 @@ func NewMongoseal(
 // Close the connection to mongo
 //
 // Also cancel the context, stopping all child locks
-func (m *Mongoseal) Close() {
+func (m *Mongoseal) Close(ctx context.Context) {
 	if m.client != nil {
-		m.client.Disconnect(m.ctx)
+		m.client.Disconnect(ctx)
 	}
-	m.cancelFunc()
 }
 
 // AcquireLock creates lock records on mongodb
 // and fetch the record to return to users
 //
 // In the background, it also creates a goroutine which
-// periodically refresh lock validity, until the lock is deleted
-func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
+// periodically refresh lock validity, until the lock is deleted,
+// or the given ctx is Done
+func (m *Mongoseal) AcquireLock(ctx context.Context, key string) (*MgoLock, error) {
 	currentTime := time.Now().Unix()
 	filter := bson.D{
 		bson.E{Key: "Key", Value: key},
@@ -116,7 +104,7 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 					bson.E{
 						Key: "last_seen",
 						// resolution unit is second
-						// reducing the chance from ntp ~250ms uncertainty
+						// reducing (NOT removing) the chance from ntp ~250ms uncertainty
 						Value: bson.M{"$lt": currentTime - m.expiryTimeSecond}}},
 			}},
 	}
@@ -131,7 +119,7 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 			}},
 	}
 	_, err := m.lockColl.UpdateOne(
-		m.ctx, filter, update,
+		ctx, filter, update,
 		options.Update().SetUpsert(true))
 
 	if err != nil {
@@ -139,16 +127,15 @@ func (m *Mongoseal) AcquireLock(key string) (*MgoLock, error) {
 		return nil, err
 	}
 
-	mgolock := mgoLockPool.Get().(*MgoLock)
-	ctx, cancelFunc := context.WithCancel(m.ctx)
+	mgolock := &MgoLock{}
+	ctx, cancelFunc := context.WithCancel(ctx)
 	mgolock.ctx = ctx
 	mgolock.cancelFunc = cancelFunc
 
 	filter = bson.D{
 		bson.E{Key: "owner", Value: m.ownerID},
 		bson.E{Key: "Key", Value: key}}
-	err = m.lockColl.FindOne(mgolock.ctx, filter).
-		Decode(mgolock)
+	err = m.lockColl.FindOne(mgolock.ctx, filter).Decode(mgolock)
 	if err != nil {
 		log.Printf("Just written lock not found, with error: %v", err)
 		return nil, err
@@ -171,6 +158,7 @@ func (m *Mongoseal) doRefreshLockOnMongo(mgolock *MgoLock) (*mongo.UpdateResult,
 			Key:   "$inc",
 			Value: bson.M{"last_seen": m.expiryTimeSecond},
 		}}
+
 	return m.lockColl.UpdateOne(mgolock.ctx, filter, update)
 }
 
@@ -241,16 +229,21 @@ func (m *Mongoseal) refreshLock(mgolock *MgoLock) {
 
 // DeleteLock removes the record lock from mongodb
 //
-// Returns nothing, as error may mean the lock has been taken by others
+// No need to handler error, as error may mean the lock has been taken by others
 func (m *Mongoseal) DeleteLock(mgolock *MgoLock) {
+	// separate this by itself
+	// valid or not, we need to force the lock to be un-usable,
+	// and for it to be `right now`
+	mgolock.updateValidity(false)
+	mgolock.cancelFunc()
+
+	// separate this by itself
+	// because if still valid, we may need to remove the lock record
 	if mgolock.IsValid() {
-		mgolock.updateValidity(false)
 		filter := bson.D{
 			bson.E{Key: "owner", Value: m.ownerID},
 			bson.E{Key: "Key", Value: mgolock.Key},
 			bson.E{Key: "Version", Value: mgolock.Version}}
 		m.lockColl.DeleteOne(mgolock.ctx, filter)
-		mgolock.cancelFunc()
 	}
-	mgoLockPool.Put(mgolock)
 }

@@ -38,7 +38,6 @@ func TestNew(t *testing.T) {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
 	m, err := NewMongoseal(
-		ctx,
 		client,
 		"mgo", "ownerID", 2, false, -1)
 	if err != nil {
@@ -47,10 +46,7 @@ func TestNew(t *testing.T) {
 	if m.remainingBeforeRefreshSecond != 1 {
 		t.Fatal("When negative, should be set to 1, but it is not")
 	}
-	if m.ctx == nil {
-		t.Fatal("It should create context.background() if nil is passed, but it is not")
-	}
-	m.Close()
+	m.Close(ctx)
 }
 
 func TestAcquireRefreshDelete(t *testing.T) {
@@ -61,13 +57,12 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
 	m, err := NewMongoseal(
-		ctx,
 		client,
 		"mgo", "ownerID", 3, true, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
-	defer m.Close()
+	defer m.Close(ctx)
 
 	mainKey := "mainKey"
 	otherKey := "otherKey"
@@ -79,7 +74,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 	// this goroutine won't delete the key by itself
 	// assuming failed node
 	go func(endChan chan<- bool) {
-		mgolock, err := m.AcquireLock(mainKey)
+		mgolock, err := m.AcquireLock(ctx, mainKey)
 		if err != nil {
 			log.Fatalf("Failed Getting Lock when no lock exists: %v", err)
 		}
@@ -121,7 +116,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 	go func() {
 		time.Sleep(1 * time.Second)
 		log.Print("Goroutine 2 starts running")
-		_, err := m.AcquireLock(mainKey)
+		_, err := m.AcquireLock(ctx, mainKey)
 		if err == nil {
 			log.Fatal("This call should fail but it is not")
 		}
@@ -133,7 +128,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 	go func() {
 		time.Sleep(1 * time.Second)
 		log.Print("Goroutine 3 starts running")
-		mgolock, err := m.AcquireLock(otherKey)
+		mgolock, err := m.AcquireLock(ctx, otherKey)
 		if err != nil {
 			log.Fatalf("Failed getting different key from those lock existing: %v", err)
 		}
@@ -147,7 +142,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 
 	time.Sleep(3250 * time.Millisecond)
 	filter := bson.D{bson.E{Key: "Key", Value: mainKey}}
-	_, err = m.lockColl.DeleteOne(m.ctx, filter)
+	_, err = m.lockColl.DeleteOne(ctx, filter)
 	if err != nil {
 		log.Fatalf("Failed simulating missing key: %v", err)
 	}
@@ -164,13 +159,12 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
 	m, err := NewMongoseal(
-		ctx,
 		client,
 		"mgo", "ownerID", 3, false, 1)
 	if err != nil {
 		t.Fatalf("Failed creating mongohandler: %v", err)
 	}
-	defer m.Close()
+	defer m.Close(ctx)
 
 	versionUpgradeKey := "versionUpgradeKey"
 	endChan := make(chan bool)
@@ -178,7 +172,7 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 	go func(endChan chan bool) {
 		time.Sleep(4000 * time.Millisecond)
 		log.Print("Goroutine starts running")
-		mgolock, err := m.AcquireLock(versionUpgradeKey)
+		mgolock, err := m.AcquireLock(ctx, versionUpgradeKey)
 		if err != nil {
 			log.Fatal("This call should not fail but it is")
 		}
@@ -201,11 +195,11 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 		bson.E{Key: "owner", Value: m.ownerID},
 		bson.E{Key: "last_seen", Value: time.Now().Unix()},
 	}
-	_, err = m.lockColl.InsertOne(m.ctx, docs)
+	_, err = m.lockColl.InsertOne(ctx, docs)
 	if err != nil {
 		log.Fatalf("Failed simulating dummy version 1 key: %v", err)
 	}
-	defer m.lockColl.DeleteOne(m.ctx,
+	defer m.lockColl.DeleteOne(ctx,
 		bson.D{bson.E{Key: "Key", Value: versionUpgradeKey}})
 	<-endChan
 }
@@ -218,13 +212,12 @@ func BenchmarkAcquireReleaseLock(b *testing.B) {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
 	m, err := NewMongoseal(
-		ctx,
 		client,
 		"mgo", "ownerID", 10, false, 1)
 	if err != nil {
 		b.Fatalf("Failed creating mongohandler: %v", err)
 	}
-	defer m.Close()
+	defer m.Close(ctx)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -233,7 +226,7 @@ func BenchmarkAcquireReleaseLock(b *testing.B) {
 		keyName := fmt.Sprintf("key_%d", i+1)
 		// b.StartTimer()
 
-		mgolock, err := m.AcquireLock(keyName)
+		mgolock, err := m.AcquireLock(ctx, keyName)
 		if err != nil {
 			log.Fatalf("Failed Getting Lock when no lock exists: %v", err)
 		}
