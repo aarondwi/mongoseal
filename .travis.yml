@@ -19,4 +19,4 @@ script:
   - go test -race -timeout 30s .
 
 after_script:
-  - docker-compose -f ./test/docker-compose.yml down
+  - docker-compose -f ./test/docker-compose.yml down --volume --remove-orphans

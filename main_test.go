@@ -37,14 +37,11 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
-	m, err := NewMongoseal(
-		client,
-		"mgo", "ownerID", 2, false, -1)
-	if err != nil {
-		t.Fatalf("Failed creating mongohandler: %v", err)
-	}
-	if m.remainingBeforeRefreshSecond != 1 {
-		t.Fatal("When negative, should be set to 1, but it is not")
+	m := New(client, "ownerID", Option{})
+	if m.remainingBeforeRefreshSecond != 1 ||
+		m.expiryTimeSecond != 5 ||
+		m.needRefresh != false {
+		t.Fatal("Failed setting up default value")
 	}
 	m.Close(ctx)
 }
@@ -56,12 +53,12 @@ func TestAcquireRefreshDelete(t *testing.T) {
 	if err != nil {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
-	m, err := NewMongoseal(
-		client,
-		"mgo", "ownerID", 3, true, 1)
-	if err != nil {
-		t.Fatalf("Failed creating mongohandler: %v", err)
-	}
+	m := New(client, "ownerID",
+		Option{
+			ExpiryTimeSecond:             3,
+			NeedRefresh:                  true,
+			RemainingBeforeRefreshSecond: 1,
+		})
 	defer m.Close(ctx)
 
 	mainKey := "mainKey"
@@ -78,7 +75,6 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		if err != nil {
 			log.Fatalf("Failed Getting Lock when no lock exists: %v", err)
 		}
-		defer m.DeleteLock(mgolock)
 		log.Printf("goroutines 1 hold the key: %s", mainKey)
 
 		time.Sleep(1 * time.Second) // second 1
@@ -107,6 +103,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		if mgolock.IsValid() {
 			log.Fatal("Should have not refreshed the lock, but it has")
 		}
+		m.DeleteLock(mgolock)
 		endChan <- true
 	}(endChan)
 
@@ -124,7 +121,7 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		return
 	}()
 
-	// goroutine 3 simulates successfully obtain a lock with different id
+	// goroutine 3 simulates successfully obtain a lock with different id, and deleting it
 	go func() {
 		time.Sleep(1 * time.Second)
 		log.Print("Goroutine 3 starts running")
@@ -135,8 +132,8 @@ func TestAcquireRefreshDelete(t *testing.T) {
 		if !mgolock.IsValid() {
 			log.Fatal("Another key not exists should be valid but is not")
 		}
-		defer m.DeleteLock(mgolock)
 		log.Printf("Goroutine 3 accepting a valid key: %s", otherKey)
+		m.DeleteLock(mgolock)
 		return
 	}()
 
@@ -158,12 +155,11 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 	if err != nil {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
-	m, err := NewMongoseal(
-		client,
-		"mgo", "ownerID", 3, false, 1)
-	if err != nil {
-		t.Fatalf("Failed creating mongohandler: %v", err)
-	}
+	m := New(client, "ownerID",
+		Option{
+			ExpiryTimeSecond:             3,
+			RemainingBeforeRefreshSecond: 1,
+		})
 	defer m.Close(ctx)
 
 	versionUpgradeKey := "versionUpgradeKey"
@@ -176,7 +172,6 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 		if err != nil {
 			log.Fatal("This call should not fail but it is")
 		}
-		defer m.DeleteLock(mgolock)
 
 		if mgolock.Version != 2 {
 			log.Fatalf("The lock should be at version 2 but it is not, it is %d", mgolock.Version)
@@ -186,6 +181,7 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 		if mgolock.IsValid() {
 			log.Fatal("Should have not refreshed the lock, but it has")
 		}
+		m.DeleteLock(mgolock)
 		endChan <- true
 	}(endChan)
 
@@ -207,28 +203,19 @@ func TestIncreaseVersionAndNotRefreshing(t *testing.T) {
 func BenchmarkAcquireReleaseLock(b *testing.B) {
 	ctx := context.Background()
 	client, err := setupMongoForTest(ctx,
-		"mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mgo?replicaSet=rs")
+		"mongodb://mgo1:27017,mgo2:27018,mgo3:27019/mongoseal?replicaSet=rs")
 	if err != nil {
 		log.Printf("Failed connecting to mongo: %v", err)
 	}
-	m, err := NewMongoseal(
-		client,
-		"mgo", "ownerID", 10, false, 1)
-	if err != nil {
-		b.Fatalf("Failed creating mongohandler: %v", err)
-	}
+	m := New(client, "ownerID", Option{ExpiryTimeSecond: 10})
 	defer m.Close(ctx)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// no need to benchmark the key creation
-		// b.StopTimer()
 		keyName := fmt.Sprintf("key_%d", i+1)
-		// b.StartTimer()
-
 		mgolock, err := m.AcquireLock(ctx, keyName)
 		if err != nil {
-			log.Fatalf("Failed Getting Lock when no lock exists: %v", err)
+			log.Fatalf("Failed Getting Lock when no lock supposed to be exist: %v", err)
 		}
 		m.DeleteLock(mgolock)
 	}

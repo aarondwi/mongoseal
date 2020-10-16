@@ -51,13 +51,16 @@ Usage
 // and 1s to save it to db or others
 // set the expiryTimeSecond to be more than 11s, preferably around 20s
 // to add buffer for process pause, network delay, etc
-m, err := NewMongoSeal(
+m, err := mongoseal.New(
   mongoClientObject,
-  dbname,
   workerUniqueId,
-  expiryTimeSecond,
-  needRefresh,
-  remainingBeforeResfreshSecond)
+  mongoseal.Option{
+    DBName: "mongoseal",
+    CollName: "lock",
+    ExpiryTimeSecond: 5,
+    NeedRefresh: true,
+    RemainingBeforeRefreshSecond: 1
+  })
 if err != nil {
   // handle the errors, failed creating connection to mongodb
 }

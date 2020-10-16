@@ -40,6 +40,31 @@ func (m *MgoLock) updateValidity(status bool) {
 	m.isValid = status
 }
 
+// Option is just a wrapper for parameter
+// in Mongoseal's creation
+//
+// the defaults are:
+//
+// dbName -> mongoseal
+//
+// collName -> lock
+//
+// expiryTimeSecond -> 5
+//
+// needRefresh -> false
+//
+// remainingBeforeRefreshSecond -> 1
+//
+// for `expiryTimeSecond` and `remainingBeforeRefreshSecond`,
+// value lte 0 resets to default value
+type Option struct {
+	DBName                       string
+	CollName                     string
+	ExpiryTimeSecond             int64
+	NeedRefresh                  bool
+	RemainingBeforeRefreshSecond int64
+}
+
 // Mongoseal is the core object to create by user,
 // returning a factory that creates the lock
 type Mongoseal struct {
@@ -51,30 +76,36 @@ type Mongoseal struct {
 	remainingBeforeRefreshSecond int64
 }
 
-// NewMongoseal creates our new Mongoseal.
+// New creates our new Mongoseal.
 // It needs a context (gonna create one if nil passed),
 // mongoClient pointer object, and list of options
-func NewMongoseal(
+func New(
 	client *mongo.Client,
-	dbname string,
 	ownerID string,
-	expiryTimeSecond int64,
-	needRefresh bool,
-	remainingBeforeRefreshSecond int64) (*Mongoseal, error) {
+	option Option) *Mongoseal {
 
-	if remainingBeforeRefreshSecond <= 0 {
-		remainingBeforeRefreshSecond = 1
+	if option.DBName == "" {
+		option.DBName = "mongoseal"
+	}
+	if option.CollName == "" {
+		option.CollName = "lock"
+	}
+	if option.ExpiryTimeSecond <= 0 {
+		option.ExpiryTimeSecond = 5
+	}
+	if option.RemainingBeforeRefreshSecond <= 0 {
+		option.RemainingBeforeRefreshSecond = 1
 	}
 
-	coll := client.Database(dbname).Collection("lock")
+	coll := client.Database(option.DBName).Collection(option.CollName)
 	return &Mongoseal{
 		client:                       client,
 		lockColl:                     coll,
 		ownerID:                      ownerID,
-		expiryTimeSecond:             expiryTimeSecond,
-		needRefresh:                  needRefresh,
-		remainingBeforeRefreshSecond: remainingBeforeRefreshSecond,
-	}, nil
+		expiryTimeSecond:             option.ExpiryTimeSecond,
+		needRefresh:                  option.NeedRefresh,
+		remainingBeforeRefreshSecond: option.RemainingBeforeRefreshSecond,
+	}
 }
 
 // Close the connection to mongo
@@ -232,12 +263,6 @@ func (m *Mongoseal) refreshLock(mgolock *MgoLock) {
 // No need to handler error, as error may mean the lock has been taken by others
 func (m *Mongoseal) DeleteLock(mgolock *MgoLock) {
 	// separate this by itself
-	// valid or not, we need to force the lock to be un-usable,
-	// and for it to be `right now`
-	mgolock.updateValidity(false)
-	mgolock.cancelFunc()
-
-	// separate this by itself
 	// because if still valid, we may need to remove the lock record
 	if mgolock.IsValid() {
 		filter := bson.D{
@@ -245,5 +270,12 @@ func (m *Mongoseal) DeleteLock(mgolock *MgoLock) {
 			bson.E{Key: "Key", Value: mgolock.Key},
 			bson.E{Key: "Version", Value: mgolock.Version}}
 		m.lockColl.DeleteOne(mgolock.ctx, filter)
+	}
+
+	// separate this by itself
+	// valid or not, we need to force the lock to be un-usable
+	mgolock.updateValidity(false)
+	if m.needRefresh {
+		mgolock.cancelFunc()
 	}
 }
